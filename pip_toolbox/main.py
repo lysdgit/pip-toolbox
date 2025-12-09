@@ -8,6 +8,7 @@ import os
 from packaging.version import parse as parse_version  # 用于可靠的版本比较
 import time  # 用于状态更新
 import sys  # 在 __main__ 中用于平台检查
+import re
 
 # --- 配置 ---
 PIP_COMMAND = shutil.which("pip3") or shutil.which("pip") or "pip"
@@ -40,6 +41,20 @@ def get_current_source():
     except Exception as e:
         print(f"获取当前源出错: {e}")
         return "无法获取"
+
+def list_rc_versions(package_name):
+    result = subprocess.run(
+        ["pip", "install", f"{package_name}==0.0.89rc1", "--pre"],
+        capture_output=True,
+        text=True
+    )
+    m = re.search(r"from versions: (.+?)\)", result.stderr, re.DOTALL)
+    if not m:
+        return []
+
+    versions = [v.strip() for v in m.group(1).split(",")]
+    rc_versions = [v for v in versions if "rc" in v.lower()]
+    return rc_versions
 
 def parse_pip_index_versions(output, pkg_name):
     """更鲁棒地解析 'pip index versions' 的输出以获取版本列表。"""
@@ -79,8 +94,14 @@ def parse_pip_index_versions(output, pkg_name):
                 parsed_v = parse_version(v_str)
                 valid_versions.append(parsed_v)
             except Exception:
-                pass
-        valid_versions.sort(reverse=True)
+                pass     
+    rc_list = list_rc_versions(pkg_name)
+    for rc_v in rc_list:
+        try:
+            valid_versions.append(parse_version(rc_v))
+        except:
+            pass
+    valid_versions.sort(reverse=True)
     if not valid_versions:
         print(f"警告: 无法从输出中为 {pkg_name} 解析任何版本:\n---\n{output}\n---")
     return [str(v) for v in valid_versions]
@@ -784,8 +805,8 @@ def toggle_outdated_view():
 # --- 主应用程序设置 ---
 root = tk.Tk()
 root.title(f"Python Pip 包管理器 (Using: {os.path.basename(PIP_COMMAND)})")
-root.geometry("700x750")
-root.minsize(600, 500)
+root.geometry("800x750")
+root.minsize(600, 800)
 
 # --- 样式配置 (可选) ---
 style = ttk.Style()
