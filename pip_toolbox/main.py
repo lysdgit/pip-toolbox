@@ -805,8 +805,17 @@ def toggle_outdated_view():
 # --- 主应用程序设置 ---
 root = tk.Tk()
 root.title(f"Python Pip 包管理器 (Using: {os.path.basename(PIP_COMMAND)})")
-root.geometry("800x750")
-root.minsize(600, 800)
+
+sw = root.winfo_screenwidth()
+sh = root.winfo_screenheight()
+
+w = int(sw * 0.31)
+h = int(sh * 0.7)
+
+root.geometry(f"{w}x{h}+200+100")
+
+#root.geometry("800x750")
+#root.minsize(500, 800)
 
 # --- 样式配置 (可选) ---
 style = ttk.Style()
@@ -869,15 +878,16 @@ status_bar = ttk.Frame(root, relief=tk.SUNKEN, borderwidth=1, padding=0)
 status_bar.pack(side="bottom", fill="x")
 status_label = ttk.Label(status_bar, text="就绪.", anchor='w', padding=(5, 2, 5, 2))
 status_label.pack(side="left", fill="x", expand=True)
-log_visible_var = tk.BooleanVar(value=False)
+log_visible_var = tk.BooleanVar(value=True)  # 默认显示日志
 log_toggle_checkbutton = ttk.Checkbutton(status_bar, text="日志", variable=log_visible_var, command=toggle_log_display, style='Toolbutton')
 log_toggle_checkbutton.pack(side="right", padx=(0, 2), pady=1)
 clear_log_button = ttk.Button(status_bar, text="清空", command=clear_log, width=5, style='Toolbutton')
 
-# --- 日志区域 (初始隐藏) ---
+# --- 日志区域 (初始显示) ---
 log_frame = ttk.Frame(root, height=150, relief=tk.GROOVE, borderwidth=1)
 log_display_area = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=8, state=tk.DISABLED, relief=tk.FLAT, bd=0, font=("Consolas", 9) if os.name=='nt' else ("Monospace", 9))
 log_display_area.pack(side="top", fill="both", expand=True, padx=1, pady=1)
+toggle_log_display()  # 启动时显示日志
 
 # --- 事件绑定 ---
 tree.bind("<<TreeviewSelect>>", on_tree_select)
