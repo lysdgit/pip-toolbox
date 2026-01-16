@@ -13,7 +13,8 @@ setup(
     long_description_content_type="text/markdown",  
     packages=["pip_toolbox"],
     install_requires=[
-        "tk"
+        "PyQt5>=5.15.0",
+        "packaging"
     ],
     entry_points={
         "console_scripts": [

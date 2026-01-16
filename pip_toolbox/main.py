@@ -1,40 +1,340 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, scrolledtext
-import pkg_resources
+"""
+Python Pip 包管理器 - PyQt5 版本
+现代化的 GUI 界面，用于管理 Python 包
+"""
+
+import sys
+import os
+import re
+import time
+import shutil
 import subprocess
 import threading
-import shutil
-import os
-from packaging.version import parse as parse_version  # 用于可靠的版本比较
-import time  # 用于状态更新
-import sys  # 在 __main__ 中用于平台检查
-import re
+from typing import Optional, List, Tuple, Dict
+
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QTableWidget, QTableWidgetItem, QHeaderView, QPushButton,
+    QLineEdit, QLabel, QComboBox, QTextEdit, QMessageBox,
+    QInputDialog, QProgressBar, QFrame, QSplitter, QCheckBox,
+    QAbstractItemView, QStyle, QStyleFactory
+)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QFont, QColor, QPalette, QIcon
+
+import pkg_resources
+from packaging.version import parse as parse_version
 
 # --- 配置 ---
-PIP_COMMAND = shutil.which("pip3") or shutil.which("pip") or "pip"
+# 使用 python -m pip 方式调用，更可靠
+PIP_COMMAND_LIST = [sys.executable, "-m", "pip"]
 
-# --- 全局变量 ---
-all_packages = []
-version_comboboxes = {}
-outdated_packages_data = None  # 存储 [(name, installed_ver, latest_ver)] - 反映最后一次检查
-current_view_mode = "all"  # "all" 或 "outdated"
-checking_updates_thread = None  # 用于管理检查线程
-global_version_cache = {}  # 全局版本缓存，键为包名，值为 (版本列表, 时间戳)
-update_all_button = None  # 全部更新按钮的全局引用
+# --- 全局缓存 ---
+global_version_cache: Dict[str, Tuple[List[str], float]] = {}
+
+# --- 样式表 ---
+STYLE_SHEET = """
+QMainWindow {
+    background-color: #1e1e2e;
+}
+
+QWidget {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    font-size: 13px;
+}
+
+QLabel {
+    color: #cdd6f4;
+    padding: 2px;
+}
+
+QLabel#titleLabel {
+    font-size: 18px;
+    font-weight: bold;
+    color: #89b4fa;
+    padding: 10px;
+}
+
+QLabel#statusLabel {
+    color: #a6adc8;
+    padding: 5px 10px;
+    background-color: #181825;
+    border-radius: 4px;
+}
+
+QLabel#countLabel {
+    color: #94e2d5;
+    font-weight: bold;
+}
+
+QLineEdit {
+    background-color: #313244;
+    border: 2px solid #45475a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #cdd6f4;
+    selection-background-color: #89b4fa;
+}
+
+QLineEdit:focus {
+    border-color: #89b4fa;
+}
+
+QLineEdit::placeholder {
+    color: #6c7086;
+}
+
+QPushButton {
+    background-color: #45475a;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 20px;
+    color: #cdd6f4;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background-color: #585b70;
+}
+
+QPushButton:pressed {
+    background-color: #313244;
+}
+
+QPushButton:disabled {
+    background-color: #313244;
+    color: #6c7086;
+}
+
+QPushButton#primaryButton {
+    background-color: #89b4fa;
+    color: #1e1e2e;
+}
+
+QPushButton#primaryButton:hover {
+    background-color: #b4befe;
+}
+
+QPushButton#primaryButton:pressed {
+    background-color: #74c7ec;
+}
+
+QPushButton#dangerButton {
+    background-color: #f38ba8;
+    color: #1e1e2e;
+}
+
+QPushButton#dangerButton:hover {
+    background-color: #eba0ac;
+}
+
+QPushButton#successButton {
+    background-color: #a6e3a1;
+    color: #1e1e2e;
+}
+
+QPushButton#successButton:hover {
+    background-color: #94e2d5;
+}
+
+QPushButton#warningButton {
+    background-color: #fab387;
+    color: #1e1e2e;
+}
+
+QPushButton#warningButton:hover {
+    background-color: #f9e2af;
+}
+
+QTableWidget {
+    background-color: #181825;
+    border: 2px solid #313244;
+    border-radius: 10px;
+    gridline-color: #313244;
+    selection-background-color: #45475a;
+}
+
+QTableWidget::item {
+    padding: 10px;
+    border-bottom: 1px solid #313244;
+}
+
+QTableWidget::item:selected {
+    background-color: #45475a;
+    color: #cdd6f4;
+}
+
+QTableWidget::item:hover {
+    background-color: #313244;
+}
+
+QHeaderView::section {
+    background-color: #313244;
+    color: #89b4fa;
+    font-weight: bold;
+    padding: 12px;
+    border: none;
+    border-bottom: 2px solid #45475a;
+}
+
+QScrollBar:vertical {
+    background-color: #181825;
+    width: 12px;
+    border-radius: 6px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #45475a;
+    border-radius: 6px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #585b70;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar:horizontal {
+    background-color: #181825;
+    height: 12px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #45475a;
+    border-radius: 6px;
+    min-width: 30px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #585b70;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+QComboBox {
+    background-color: #313244;
+    border: 2px solid #45475a;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #cdd6f4;
+    min-width: 150px;
+}
+
+QComboBox:hover {
+    border-color: #585b70;
+}
+
+QComboBox:focus {
+    border-color: #89b4fa;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 30px;
+}
+
+QComboBox::down-arrow {
+    image: none;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #cdd6f4;
+    margin-right: 10px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #313244;
+    border: 2px solid #45475a;
+    border-radius: 6px;
+    selection-background-color: #45475a;
+    color: #cdd6f4;
+}
+
+QTextEdit {
+    background-color: #181825;
+    border: 2px solid #313244;
+    border-radius: 8px;
+    padding: 8px;
+    color: #a6adc8;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+}
+
+QProgressBar {
+    background-color: #313244;
+    border: none;
+    border-radius: 6px;
+    height: 8px;
+    text-align: center;
+}
+
+QProgressBar::chunk {
+    background-color: #89b4fa;
+    border-radius: 6px;
+}
+
+QCheckBox {
+    color: #cdd6f4;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #45475a;
+    border-radius: 4px;
+    background-color: #313244;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #585b70;
+}
+
+QFrame#separator {
+    background-color: #45475a;
+    max-height: 2px;
+    margin: 10px 0;
+}
+
+QSplitter::handle {
+    background-color: #45475a;
+}
+
+QSplitter::handle:hover {
+    background-color: #585b70;
+}
+"""
+
 
 # --- 辅助函数 ---
-def get_installed_packages():
+def get_installed_packages() -> List[Tuple[str, str]]:
     """获取所有已安装的 pip 包及其版本。"""
     pkg_resources._initialize_master_working_set()
     return sorted([(pkg.key, pkg.version) for pkg in pkg_resources.working_set])
 
-def get_current_source():
+
+def get_current_source() -> str:
     """获取当前配置的 pip 索引 URL。"""
     try:
         for scope in ["global", "user"]:
-            result = subprocess.run([PIP_COMMAND, "config", "get", f"{scope}.index-url"],
-                                    capture_output=True, text=True, encoding="utf-8", check=False,
-                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            result = subprocess.run(
+                PIP_COMMAND_LIST + ["config", "get", f"{scope}.index-url"],
+                capture_output=True, text=True, encoding="utf-8", check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
         return "默认 PyPI 源"
@@ -42,24 +342,29 @@ def get_current_source():
         print(f"获取当前源出错: {e}")
         return "无法获取"
 
-def list_rc_versions(package_name):
-    result = subprocess.run(
-        ["pip", "install", f"{package_name}==0.0.89rc1", "--pre"],
-        capture_output=True,
-        text=True
-    )
-    m = re.search(r"from versions: (.+?)\)", result.stderr, re.DOTALL)
-    if not m:
+
+def list_rc_versions(package_name: str) -> List[str]:
+    """获取包的 RC 版本。"""
+    try:
+        result = subprocess.run(
+            PIP_COMMAND_LIST + ["install", f"{package_name}==0.0.89rc1", "--pre"],
+            capture_output=True, text=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+        m = re.search(r"from versions: (.+?)\)", result.stderr, re.DOTALL)
+        if not m:
+            return []
+        versions = [v.strip() for v in m.group(1).split(",")]
+        return [v for v in versions if "rc" in v.lower()]
+    except Exception:
         return []
 
-    versions = [v.strip() for v in m.group(1).split(",")]
-    rc_versions = [v for v in versions if "rc" in v.lower()]
-    return rc_versions
 
-def parse_pip_index_versions(output, pkg_name):
-    """更鲁棒地解析 'pip index versions' 的输出以获取版本列表。"""
+def parse_pip_index_versions(output: str, pkg_name: str) -> List[str]:
+    """解析 'pip index versions' 的输出以获取版本列表。"""
     lines = output.splitlines()
     versions_str_list = []
+    
     for line in lines:
         if "Available versions:" in line:
             try:
@@ -68,863 +373,854 @@ def parse_pip_index_versions(output, pkg_name):
                 break
             except IndexError:
                 continue
+    
     if not versions_str_list:
-        potential_version_lines = []
         for line in lines:
             cleaned_line = line.replace(f"{pkg_name}", "").replace("(", "").replace(")", "").strip()
-            if not cleaned_line: continue
+            if not cleaned_line:
+                continue
             parts = [p.strip() for p in cleaned_line.split(',') if p.strip()]
-            valid_versions_on_line = 0
             if len(parts) > 1:
-                for part in parts:
-                    try:
-                        parse_version(part)
-                        valid_versions_on_line += 1
-                    except Exception:
-                        pass
-                if valid_versions_on_line >= len(parts) * 0.8:
-                    potential_version_lines.append((valid_versions_on_line, parts))
-        if potential_version_lines:
-            potential_version_lines.sort(key=lambda x: x[0], reverse=True)
-            versions_str_list = potential_version_lines[0][1]
+                valid_count = sum(1 for p in parts if _is_valid_version(p))
+                if valid_count >= len(parts) * 0.8:
+                    versions_str_list = parts
+                    break
+    
     valid_versions = []
-    if versions_str_list:
-        for v_str in versions_str_list:
-            try:
-                parsed_v = parse_version(v_str)
-                valid_versions.append(parsed_v)
-            except Exception:
-                pass     
-    rc_list = list_rc_versions(pkg_name)
-    for rc_v in rc_list:
-        try:
+    for v_str in versions_str_list:
+        if _is_valid_version(v_str):
+            valid_versions.append(parse_version(v_str))
+    
+    # 添加 RC 版本
+    for rc_v in list_rc_versions(pkg_name):
+        if _is_valid_version(rc_v):
             valid_versions.append(parse_version(rc_v))
-        except:
-            pass
+    
     valid_versions.sort(reverse=True)
-    if not valid_versions:
-        print(f"警告: 无法从输出中为 {pkg_name} 解析任何版本:\n---\n{output}\n---")
     return [str(v) for v in valid_versions]
 
-def get_latest_version(pkg_name, session_cache):
-    """为包获取最新的可用版本，使用全局缓存。"""
+
+def _is_valid_version(v: str) -> bool:
+    """检查版本字符串是否有效。"""
+    try:
+        parse_version(v)
+        return True
+    except Exception:
+        return False
+
+
+def get_latest_version(pkg_name: str) -> Optional[str]:
+    """获取包的最新版本。"""
     if pkg_name in global_version_cache:
         versions, timestamp = global_version_cache[pkg_name]
-        if time.time() - timestamp < 300:  # 5分钟有效期
-            session_cache[pkg_name] = versions[0] if versions else None
-            return session_cache[pkg_name]
+        if time.time() - timestamp < 300:  # 5分钟缓存
+            return versions[0] if versions else None
+    
     try:
-        command = [PIP_COMMAND, "index", "versions", pkg_name]
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=25,
-                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+        command = PIP_COMMAND_LIST + ["index", "versions", pkg_name]
+        result = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", timeout=25,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
         if result.returncode == 0 and result.stdout:
-            available_versions = parse_pip_index_versions(result.stdout, pkg_name)
-            global_version_cache[pkg_name] = (available_versions, time.time())
-            session_cache[pkg_name] = available_versions[0] if available_versions else None
-            return session_cache[pkg_name]
+            versions = parse_pip_index_versions(result.stdout, pkg_name)
+            global_version_cache[pkg_name] = (versions, time.time())
+            return versions[0] if versions else None
         else:
-            print(f"检查 {pkg_name} 最新版本出错: {result.stderr or result.stdout or '无输出'}")
             global_version_cache[pkg_name] = ([], time.time())
-            session_cache[pkg_name] = None
             return None
-    except subprocess.TimeoutExpired:
-        print(f"检查 {pkg_name} 最新版本超时")
-        global_version_cache[pkg_name] = ([], time.time())
-        session_cache[pkg_name] = None
-        return None
     except Exception as e:
-        print(f"检查 {pkg_name} 最新版本时异常: {e}")
+        print(f"获取 {pkg_name} 最新版本出错: {e}")
         global_version_cache[pkg_name] = ([], time.time())
-        session_cache[pkg_name] = None
         return None
 
-# --- GUI 函数 ---
-def populate_table(packages_to_display=None, view_mode="all"):
-    """根据视图模式用包数据填充 Treeview 表格。"""
-    clear_comboboxes()
-    tree.delete(*tree.get_children())
-    if packages_to_display is None:
-        if view_mode == "outdated" and outdated_packages_data:
-            packages_to_display = [(name, installed) for name, installed, latest in outdated_packages_data]
-        else:
-            packages_to_display = all_packages
-    for pkg_name, pkg_version in packages_to_display:
-        row_id = tree.insert("", "end", values=(pkg_name, pkg_version))
-        version_comboboxes[row_id] = None
-    count = len(packages_to_display)
-    count_prefix = "过时包数量: " if view_mode == "outdated" else "包数量: "
-    package_count_label.config(text=f"{count_prefix}{count}")
-    if view_mode == "outdated":
-        toggle_view_button.config(text="显示所有包")
-        if update_all_button and update_all_button.winfo_exists():
-            update_all_button.config(state="normal" if outdated_packages_data else "disabled")
-    else:
-        toggle_view_button.config(text="仅显示过时包")
-        if update_all_button and update_all_button.winfo_exists():
-            update_all_button.config(state="disabled")
-    search_packages()
 
-def clear_comboboxes():
-    """销毁任何活动的版本选择组合框。"""
-    for widget in list(version_comboboxes.values()):
-        if widget:
-            try:
-                widget.destroy()
-            except tk.TclError:
-                pass
-    version_comboboxes.clear()
-
-def search_packages(event=None):
-    """基于搜索查询过滤表格中当前显示的包。"""
-    query = search_var.get().strip().lower()
-    if current_view_mode == "outdated":
-        base_packages_data = outdated_packages_data or []
-        base_packages_list = [(name, installed) for name, installed, latest in base_packages_data]
-    else:
-        base_packages_list = all_packages
-    if query:
-        filtered_packages = [pkg for pkg in base_packages_list if query in pkg[0].lower()]
-    else:
-        filtered_packages = base_packages_list
-    _populate_table_internal(filtered_packages, current_view_mode)
-
-def _populate_table_internal(packages_list, view_mode):
-    """内部辅助函数，用于更新表格而不更改全局视图状态。"""
-    clear_comboboxes()
-    tree.delete(*tree.get_children())
-    for pkg_name, pkg_version in packages_list:
-        row_id = tree.insert("", "end", values=(pkg_name, pkg_version))
-        version_comboboxes[row_id] = None
-    count = len(packages_list)
-    count_prefix = "过时包数量: " if view_mode == "outdated" else "包数量: "
-    search_active = search_var.get().strip() != ""
-    filter_text = "(搜索中) " if search_active else ""
-    package_count_label.config(text=f"{count_prefix}{filter_text}{count}")
-
-def fetch_versions(pkg_name, combobox):
-    """为包获取可用版本（由组合框使用）。"""
-    if pkg_name in global_version_cache:
-        versions, timestamp = global_version_cache[pkg_name]
-        if time.time() - timestamp < 300:
-            available_versions_str = versions
-            parsed_versions = versions
-        else:
-            available_versions_str = []
-            parsed_versions = []
-    else:
-        available_versions_str = []
-        parsed_versions = []
-    if not parsed_versions:
+# --- 工作线程 ---
+class PackageLoaderThread(QThread):
+    """加载包列表的线程。"""
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+    
+    def run(self):
         try:
-            command = [PIP_COMMAND, "index", "versions", pkg_name]
-            result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=35,
-                                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            if result.returncode != 0 or "ERROR:" in result.stderr or "Could not find" in result.stderr or "No matching index versions found" in result.stderr:
-                error_msg = result.stderr.strip() or result.stdout.strip() or '未知查询错误'
-                if "Could not find a version that satisfies the requirement" in error_msg or \
-                   "No matching index versions found" in error_msg:
-                    error_msg = "未找到可用版本"
-                elif "ERROR: Exception:" in error_msg:
-                    error_msg = "查询时出错 (pip内部错误)"
-                available_versions_str = [f"错误: {error_msg}"]
-                parsed_versions = []
-            else:
-                parsed_versions = parse_pip_index_versions(result.stdout, pkg_name)
-                available_versions_str = parsed_versions if parsed_versions else ["未找到版本"]
-            global_version_cache[pkg_name] = (parsed_versions, time.time())
-        except subprocess.TimeoutExpired:
-            available_versions_str = ["查询超时"]
-            parsed_versions = []
-            global_version_cache[pkg_name] = ([], time.time())
+            packages = get_installed_packages()
+            self.finished.emit(packages)
         except Exception as e:
-            print(f"获取 {pkg_name} 版本出错: {e}")
-            available_versions_str = ["查询出错"]
-            parsed_versions = []
-            global_version_cache[pkg_name] = ([], time.time())
-    current_installed_version = next((v for p, v in all_packages if p == pkg_name), None)
-    latest_known_version = next((latest for name, _, latest in outdated_packages_data if name == pkg_name), None) if outdated_packages_data else None
-    display_versions = []
-    found_installed = False
-    best_match_index = 0
-    for i, v_str in enumerate(available_versions_str):
-        label = v_str
-        if not v_str.startswith("错误:") and not v_str.startswith("查询") and not v_str.startswith("未找到"):
-            is_current = (v_str == current_installed_version)
-            is_latest = (latest_known_version is not None and v_str == latest_known_version)
-            if is_current:
-                label += " (当前)"
-                found_installed = True
-                best_match_index = i
-            if is_latest and not is_current:
-                label += " (最新)"
-                if not found_installed:
-                    best_match_index = i
-        display_versions.append(label)
-    try:
-        if combobox.winfo_exists():
-            combobox.configure(state="readonly")
-            combobox["values"] = display_versions
-            combobox.set(display_versions[best_match_index] if display_versions else "无可用版本")
-    except tk.TclError:
-        print(f"信息: 为 {pkg_name} 的组合框在设置版本前已被销毁。")
+            self.error.emit(str(e))
 
-def install_selected_version():
-    """安装组合框中选定的版本。"""
-    selected_items = tree.selection()
-    if not selected_items:
-        messagebox.showwarning("未选择", "请在表格中选择一个包。")
-        return
-    item_id = selected_items[0]
-    try:
-        pkg_name, displayed_version = tree.item(item_id, "values")
-    except tk.TclError:
-        messagebox.showerror("错误", "无法获取所选项目的信息 (可能已删除)。")
-        return
-    combobox = version_comboboxes.get(item_id)
-    if not combobox or not combobox.winfo_exists() or combobox.cget('state') == 'disabled':
-        messagebox.showwarning("未加载版本", f"请等待 '{pkg_name}' 的版本加载或选择完成。")
-        return
-    selected_value = combobox.get()
-    version_to_install = selected_value.split(" ")[0].strip()
-    if not version_to_install or version_to_install.startswith("错误") or \
-       version_to_install.startswith("查询") or version_to_install == "未找到版本":
-        messagebox.showerror("无法安装", f"无法安装选定的条目: '{selected_value}'")
-        return
-    current_version = next((v for p, v in all_packages if p == pkg_name), None)
-    action = "安装"
-    prompt = f"确定要安装 {pkg_name}=={version_to_install} 吗？"
-    if current_version:
-        try:
-            v_install_parsed = parse_version(version_to_install)
-            v_current_parsed = parse_version(current_version)
-            if v_install_parsed == v_current_parsed:
-                action = "重新安装"
-                prompt = f"{pkg_name} 版本 {version_to_install} 已安装。\n是否要重新安装？"
-            elif v_install_parsed > v_current_parsed:
-                action = "更新到"
-                prompt = f"确定要将 {pkg_name} 从 {current_version} 更新到 {version_to_install} 吗？"
-            else:
-                action = "降级到"
-                prompt = f"确定要将 {pkg_name} 从 {current_version} 降级到 {version_to_install} 吗？"
-        except Exception as e:
-            print(f"警告: 无法解析版本进行比较: {e}。使用默认提示。")
-            action = "安装/更改"
-            prompt = f"确定要安装/更改到 {pkg_name}=={version_to_install} 吗？"
-    if messagebox.askyesno(f"{action}确认", prompt):
-        target_package = f"{pkg_name}=={version_to_install}"
-        command = [PIP_COMMAND, "install", "--upgrade", "--no-cache-dir", target_package]
-        run_pip_command_threaded(command, f"{action} {target_package}")
 
-def uninstall_selected_package():
-    """卸载选定的包。"""
-    selected_items = tree.selection()
-    if not selected_items:
-        messagebox.showwarning("未选择", "请在表格中选择要卸载的包。")
-        return
-    item_id = selected_items[0]
-    try:
-        pkg_name = tree.item(item_id, "values")[0]
-    except tk.TclError:
-        messagebox.showerror("错误", "无法获取所选项目的信息 (可能已删除)。")
-        return
-    if messagebox.askyesno("卸载确认", f"确定要卸载 {pkg_name} 吗？"):
-        command = [PIP_COMMAND, "uninstall", "-y", pkg_name]
-        run_pip_command_threaded(command, f"卸载 {pkg_name}")
-
-def update_all_packages():
-    """将所有过时包更新到最新版本。"""
-    if not outdated_packages_data:
-        messagebox.showinfo("无过时包", "当前没有过时包需要更新。")
-        return
-    if messagebox.askyesno("全部更新确认", f"确定要将 {len(outdated_packages_data)} 个过时包更新到最新版本吗？"):
-        disable_buttons()
-        update_log(f"⏳ 开始更新 {len(outdated_packages_data)} 个过时包...\n")
-        thread = threading.Thread(target=update_all_packages_threaded, args=(outdated_packages_data,), daemon=True)
-        thread.start()
-
-def update_all_packages_threaded(outdated_packages):
-    """在线程中批量更新所有过时包。"""
-    success = True
-    total = len(outdated_packages)
-    for i, (pkg_name, installed_version, latest_version) in enumerate(outdated_packages):
-        target_package = f"{pkg_name}=={latest_version}"
-        command = [PIP_COMMAND, "install", "--upgrade", "--no-cache-dir", target_package]
-        action_name = f"更新 {pkg_name} 到 {latest_version}"
-        root.after(0, update_log, f"⏳ ({i+1}/{total}) {action_name}...\n   命令: {' '.join(command)}\n")
-        try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                      text=True, encoding='utf-8', errors='replace',
-                                      creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            stdout, stderr = process.communicate(timeout=600)
-            if process.returncode == 0:
-                root.after(0, update_log, f"✅ ({i+1}/{total}) {action_name} 成功。\n--- 输出 ---\n{stdout}\n")
-                if stderr:
-                    root.after(0, update_log, f"--- 警告/信息 ---\n{stderr}\n")
-            else:
-                success = False
-                root.after(0, update_log, f"❌ ({i+1}/{total}) {action_name} 失败 (Code: {process.returncode}).\n--- 输出 ---\n{stdout}\n--- 错误 ---\n{stderr}\n")
-        except subprocess.TimeoutExpired:
-            success = False
-            root.after(0, update_log, f"⌛ ({i+1}/{total}) {action_name} 超时 (超过10分钟)。\n")
-            try:
-                process.kill()
-                stdout, stderr = process.communicate()
-                root.after(0, update_log, f"--- 最后输出 ---\n{stdout}\n--- 最后错误 ---\n{stderr}\n")
-            except Exception as kill_e:
-                root.after(0, update_log, f"--- 尝试终止超时进程时出错: {kill_e} ---\n")
-        except Exception as e:
-            success = False
-            root.after(0, update_log, f"❌ ({i+1}/{total}) 执行 {action_name} 时发生意外错误: {str(e)}\n")
-    root.after(0, command_finished, f"✅ 全部更新完成 ({total} 个包)。\n", success)
-
-def run_pip_command_threaded(command, action_name):
-    """在单独线程中运行 pip 命令并更新日志。"""
-    disable_buttons()
-    update_log(f"⏳ {action_name}...\n   命令: {' '.join(command)}\n")
-    thread = threading.Thread(target=run_pip_command_sync, args=(command, action_name), daemon=True)
-    thread.start()
-
-def run_pip_command_sync(command, action_name):
-    """运行 pip 命令的同步部分，在线程中执行。"""
-    output_log = ""
-    success = False
-    try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, encoding='utf-8', errors='replace',
-                                  creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-        stdout, stderr = process.communicate(timeout=600)
-        if process.returncode == 0:
-            output_log = f"✅ {action_name} 成功。\n--- 输出 ---\n{stdout}\n"
-            if stderr: output_log += f"--- 警告/信息 ---\n{stderr}\n"
-            success = True
-        else:
-            output_log = f"❌ {action_name} 失败 (Code: {process.returncode}).\n--- 输出 ---\n{stdout}\n--- 错误 ---\n{stderr}\n"
-    except subprocess.TimeoutExpired:
-        output_log = f"⌛ {action_name} 超时 (超过10分钟)。\n"
-        try:
-            process.kill()
-            stdout, stderr = process.communicate()
-            output_log += f"--- 最后输出 ---\n{stdout}\n--- 最后错误 ---\n{stderr}\n"
-        except Exception as kill_e:
-            output_log += f"--- 尝试终止超时进程时出错: {kill_e} ---\n"
-    except FileNotFoundError:
-        output_log = f"❌ 命令错误: 无法找到 '{command[0]}'. 请确保 pip 在 PATH 中。\n"
-    except Exception as e:
-        output_log = f"❌ 执行 {action_name} 时发生意外错误: {str(e)}\n"
-    root.after(0, command_finished, output_log, success)
-
-def command_finished(log_message, needs_refresh):
-    """pip 命令完成后更新 GUI。"""
-    update_log(log_message)
-    if needs_refresh:
-        update_log("🔄 正在刷新已安装包列表...\n")
-        global outdated_packages_data
-        outdated_packages_data = None
-        try:
-            if toggle_view_button and toggle_view_button.winfo_exists():
-                toggle_view_button.config(state="disabled")
-            if update_all_button and update_all_button.winfo_exists():
-                update_all_button.config(state="disabled")
-        except (tk.TclError, NameError):
-            pass
-        status_label.config(text="包列表已更改，请重新检查更新。")
-        refresh_package_list_threaded()
-    else:
-        enable_buttons()
-        update_log("🔴 操作未成功完成或无需刷新列表。\n")
-
-def refresh_package_list_threaded():
-    """在后台线程中获取更新的包列表。"""
-    global all_packages
-    try:
-        pkg_resources._initialize_master_working_set()
-        all_packages = get_installed_packages()
-        log_msg = "✅ 包列表刷新完成。\n"
-        success = True
-    except Exception as e:
-        log_msg = f"❌ 刷新包列表时出错: {e}\n"
-        success = False
-    root.after(0, update_gui_after_refresh, log_msg, success)
-
-def update_gui_after_refresh(log_msg, success):
-    """刷新后更新表格并启用按钮。"""
-    update_log(log_msg)
-    if success:
-        global current_view_mode
-        current_view_mode = "all"
-        populate_table(view_mode="all")
-        status_label.config(text=f"包列表已刷新 ({len(all_packages)} 个包)。")
-    else:
-        status_label.config(text="刷新包列表失败。")
-    enable_buttons()
-    try:
-        if toggle_view_button and toggle_view_button.winfo_exists():
-            toggle_view_button.config(state="disabled")
-        if update_all_button and update_all_button.winfo_exists():
-            update_all_button.config(state="disabled")
-    except (tk.TclError, NameError):
-        pass
-
-def disable_buttons():
-    """在操作期间禁用按钮。"""
-    for btn in [install_button, uninstall_button, change_source_button, check_updates_button, toggle_view_button, update_all_button]:
-        try:
-            if btn and btn.winfo_exists():
-                btn.config(state="disabled")
-        except (tk.TclError, NameError):
-            pass
-
-def enable_buttons():
-    """操作后重新启用按钮。"""
-    try:
-        if install_button and install_button.winfo_exists():
-            install_button.config(state="normal")
-        if uninstall_button and uninstall_button.winfo_exists():
-            uninstall_button.config(state="normal")
-        if change_source_button and change_source_button.winfo_exists():
-            change_source_button.config(state="normal")
-        if check_updates_button and check_updates_button.winfo_exists():
-            check_updates_button.config(state="normal")
-        if toggle_view_button and toggle_view_button.winfo_exists():
-            toggle_view_button.config(state="normal" if outdated_packages_data else "disabled")
-        if update_all_button and update_all_button.winfo_exists():
-            update_all_button.config(state="normal" if current_view_mode == "outdated" and outdated_packages_data else "disabled")
-    except (tk.TclError, NameError):
-        pass
-
-def update_log(message):
-    """将消息追加到日志显示区域。"""
-    if not log_display_area or not log_display_area.winfo_exists():
-        return
-    try:
-        log_display_area.config(state=tk.NORMAL)
-        log_display_area.insert(tk.END, message + "\n")
-        log_display_area.see(tk.END)
-        log_display_area.config(state=tk.DISABLED)
-    except tk.TclError as e:
-        print(f"更新日志出错: {e}")
-
-def clear_log():
-    """清除日志显示区域。"""
-    if not log_display_area or not log_display_area.winfo_exists():
-        return
-    try:
-        log_display_area.config(state=tk.NORMAL)
-        log_display_area.delete('1.0', tk.END)
-        log_display_area.config(state=tk.DISABLED)
-    except tk.TclError:
-        pass
-
-def on_tree_select(event):
-    """处理 Treeview 中的选择变化，放置/更新组合框。"""
-    selected_items = tree.selection()
-    if not selected_items:
-        for widget in version_comboboxes.values():
-            if widget and widget.winfo_ismapped():
-                widget.place_forget()
-        return
-    item_id = selected_items[0]
-    for row_id, widget in list(version_comboboxes.items()):
-        if widget and row_id != item_id:
-            try:
-                if widget.winfo_exists():
-                    widget.place_forget()
-            except tk.TclError:
-                pass
-    existing_combobox = version_comboboxes.get(item_id)
-    if existing_combobox and not existing_combobox.winfo_exists():
-        existing_combobox = None
-        version_comboboxes[item_id] = None
-    try:
-        if not tree.exists(item_id):
-            return
-        pkg_name, _ = tree.item(item_id, "values")
-    except tk.TclError:
-        return
-    if not existing_combobox:
-        combobox = ttk.Combobox(tree, state="disabled", exportselection=False)
-        version_comboboxes[item_id] = combobox
-    else:
-        combobox = existing_combobox
-    combobox.set("正在查询版本...")
-    combobox.configure(state="disabled")
-    root.after(10, place_combobox, item_id, combobox, pkg_name)
-
-def place_combobox(item_id, combobox, pkg_name):
-    """放置组合框并开始获取版本。"""
-    try:
-        if not combobox.winfo_exists():
-            return
-        if not tree.exists(item_id):
-            return
-        bbox = tree.bbox(item_id, column=1)
-        if bbox:
-            x, y, width, height = bbox
-            combobox.place(x=x, y=y, width=width, height=height)
-            threading.Thread(target=fetch_versions, args=(pkg_name, combobox), daemon=True).start()
-        else:
-            combobox.place_forget()
-    except tk.TclError as e:
-        print(f"为 {pkg_name} 放置组合框出错: {e}")
-        try:
-            if combobox.winfo_exists():
-                combobox.place_forget()
-        except tk.TclError:
-            pass
-
-def update_combobox_position(event=None):
-    """当视图变化时更新活动组合框的位置。"""
-    root.after_idle(_do_update_combobox_position)
-
-def _do_update_combobox_position():
-    """更新组合框位置的实际工作。"""
-    selected_items = tree.selection()
-    if not selected_items:
-        for row_id, widget in list(version_comboboxes.items()):
-            if widget and widget.winfo_ismapped():
-                widget.place_forget()
-        return
-    item_id = selected_items[0]
-    combobox = version_comboboxes.get(item_id)
-    try:
-        if combobox and combobox.winfo_exists():
-            if not tree.exists(item_id):
-                combobox.place_forget()
-                if version_comboboxes.get(item_id) == combobox:
-                    version_comboboxes[item_id] = None
-                return
-            bbox = tree.bbox(item_id, column=1)
-            if bbox:
-                x, y, width, height = bbox
-                current_info = combobox.place_info()
-                if (str(x) != current_info.get('x') or
-                    str(y) != current_info.get('y') or
-                    str(width) != current_info.get('width') or
-                    str(height) != current_info.get('height')):
-                    combobox.place(x=x, y=y, width=width, height=height)
-            else:
-                combobox.place_forget()
-    except tk.TclError:
-        pass
-
-def change_source():
-    """允许更改 pip 索引 URL。"""
-    global outdated_packages_data
-    current_src = get_current_source()
-    new_source = simpledialog.askstring("更改 Pip 源",
-                                       f"当前源: {current_src}\n\n输入新的 PyPI 索引 URL (留空则重置):",
-                                       initialvalue="https://pypi.tuna.tsinghua.edu.cn/simple")
-    if new_source is None:
-        return
-    if not new_source.strip():
-        if messagebox.askyesno("重置确认", "确定要移除自定义源设置，恢复默认吗？"):
-            update_log("正在尝试移除自定义源...")
-            success = False
-            try:
-                cmd_global = [PIP_COMMAND, "config", "unset", "global.index-url"]
-                cmd_user = [PIP_COMMAND, "config", "unset", "user.index-url"]
-                subprocess.run(cmd_global, capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-                subprocess.run(cmd_user, capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-                success = True
-                messagebox.showinfo("源已重置", "已尝试移除自定义源配置。")
-                update_log("✅ 源配置已尝试重置。")
-            except Exception as e:
-                messagebox.showerror("错误", f"移除源时出错: {e}")
-                update_log(f"❌ 移除源时出错: {e}")
-                success = False
-            if success:
-                outdated_packages_data = None
+class UpdateCheckerThread(QThread):
+    """检查更新的线程。"""
+    progress = pyqtSignal(int, str, int, int)
+    finished = pyqtSignal(list, float)
+    error = pyqtSignal(str)
+    
+    def __init__(self, packages: List[Tuple[str, str]]):
+        super().__init__()
+        self.packages = packages
+    
+    def run(self):
+        outdated = []
+        total = len(self.packages)
+        start_time = time.time()
+        
+        for i, (name, installed_ver) in enumerate(self.packages):
+            self.progress.emit(int((i + 1) / total * 100), name, i + 1, total)
+            latest_ver = get_latest_version(name)
+            if latest_ver:
                 try:
-                    if toggle_view_button and toggle_view_button.winfo_exists():
-                        toggle_view_button.config(state="disabled")
-                    if update_all_button and update_all_button.winfo_exists():
-                        update_all_button.config(state="disabled")
-                except (tk.TclError, NameError):
+                    if parse_version(latest_ver) > parse_version(installed_ver):
+                        outdated.append((name, installed_ver, latest_ver))
+                except Exception:
                     pass
-                status_label.config(text="源已更改，请重新检查更新。")
-        return
-    if not (new_source.startswith("http://") or new_source.startswith("https://")):
-        messagebox.showerror("格式错误", "源地址必须以 http:// 或 https:// 开头。")
-        return
-    outdated_packages_data = None
-    try:
-        if toggle_view_button and toggle_view_button.winfo_exists():
-            toggle_view_button.config(state="disabled")
-        if update_all_button and update_all_button.winfo_exists():
-            update_all_button.config(state="disabled")
-    except (tk.TclError, NameError):
-        pass
-    status_label.config(text="源已更改，请重新检查更新。")
-    command = [PIP_COMMAND, "config", "set", "global.index-url", new_source]
-    action_name = f"设置新源为 {new_source}"
-    run_pip_command_threaded(command, action_name)
-    messagebox.showinfo("正在换源", f"已开始尝试将 pip 源设置为: {new_source}\n请查看下方日志了解结果。")
+        
+        duration = time.time() - start_time
+        self.finished.emit(outdated, duration)
 
-def toggle_log_display():
-    """显示或隐藏日志显示区域。"""
-    if log_visible_var.get():
-        log_frame.pack(side="bottom", fill="x", padx=5, pady=(0,0), before=status_bar)
-        try:
-            if clear_log_button and clear_log_button.winfo_exists():
-                clear_log_button.pack(in_=status_bar, side="right", padx=(0,5), pady=1)
-        except (tk.TclError, NameError):
-            pass
-    else:
-        log_frame.pack_forget()
-        try:
-            if clear_log_button and clear_log_button.winfo_exists():
-                clear_log_button.pack_forget()
-        except (tk.TclError, NameError):
-            pass
 
-# --- 过时包逻辑 ---
-def check_for_updates():
-    """在当前视图中启动检查过时包的过程（尊重任何活跃过滤）。"""
-    global checking_updates_thread
-    if checking_updates_thread and checking_updates_thread.is_alive():
-        messagebox.showinfo("请稍候", "已经在检查更新了。")
-        return
-    packages_to_check = []
-    displayed_item_ids = tree.get_children()
-    if not displayed_item_ids:
-        messagebox.showinfo("无包显示", "表格中当前没有显示任何包可供检查。")
-        return
-    for item_id in displayed_item_ids:
-        try:
-            pkg_name, pkg_version = tree.item(item_id, "values")
-            packages_to_check.append((pkg_name, pkg_version))
-        except tk.TclError:
-            print(f"警告: 无法获取项 {item_id} 的值，跳过。")
-            continue
-    if not packages_to_check:
-        messagebox.showinfo("无包", "无法获取表格中显示的包信息。")
-        return
-    is_filtered_check = len(packages_to_check) < len(all_packages)
-    check_scope_message = f"当前视图中的 {len(packages_to_check)} 个包" if is_filtered_check else f"所有 {len(all_packages)} 个已安装包"
-    status_suffix = " (筛选后)" if is_filtered_check else ""
-    disable_buttons()
-    status_label.config(text=f"正在准备检查更新{status_suffix}...")
-    update_log(f"⏳ 开始检查 {check_scope_message} 的更新...")
-    session_cache = {}
-    checking_updates_thread = threading.Thread(target=check_for_updates_threaded,
-                                             args=(packages_to_check, session_cache, is_filtered_check),
-                                             daemon=True)
-    checking_updates_thread.start()
-
-def check_for_updates_threaded(packages_to_check, session_cache, is_filtered_check):
-    """工作线程函数，从提供的列表中查找过时包。"""
-    outdated_list = []
-    total_packages = len(packages_to_check)
-    start_time = time.time()
-    status_suffix = " (筛选后)" if is_filtered_check else ""
-    print(f"[线程] 检查 {total_packages} 个包的更新{status_suffix}...")
-    for i, (pkg_name, installed_version_str) in enumerate(packages_to_check):
-        progress = int(((i + 1) / total_packages) * 100)
-        if i % 5 == 0 or i == total_packages - 1:
-            root.after(0, update_progress, progress, pkg_name, total_packages, i + 1, status_suffix)
-        latest_version_str = get_latest_version(pkg_name, session_cache)
-        if latest_version_str:
-            try:
-                installed_ver = parse_version(installed_version_str)
-                latest_ver = parse_version(latest_version_str)
-                if latest_ver > installed_ver:
-                    outdated_list.append((pkg_name, installed_version_str, latest_version_str))
-            except Exception as e:
-                print(f"[线程] 警告: 无法为 {pkg_name} 比较版本 ('{installed_version_str}' vs '{latest_version_str}'): {e}")
-                root.after(0, update_log, f"⚠️ 无法比较版本: {pkg_name} ({installed_version_str} / {latest_version_str})")
-    end_time = time.time()
-    duration = end_time - start_time
-    print(f"[线程] 检查在 {duration:.2f}秒内完成。找到 {len(outdated_list)} 个过时包{status_suffix}。")
-    root.after(0, updates_check_finished, outdated_list, duration, is_filtered_check)
-
-def update_progress(progress, current_pkg, total, count, status_suffix):
-    """用进度更新状态标签（在主线程中运行）。"""
-    try:
-        if status_label and status_label.winfo_exists():
-            status_label.config(text=f"正在检查更新{status_suffix} ({progress}%): {count}/{total} ({current_pkg})...")
-    except tk.TclError:
-        pass
-
-def updates_check_finished(outdated_list, duration, is_filtered_check):
-    """当更新检查线程完成时调用（在主线程中运行）。"""
-    global outdated_packages_data, current_view_mode
-    outdated_packages_data = sorted(outdated_list)
-    count = len(outdated_packages_data)
-    checked_count_display = len(tree.get_children()) if is_filtered_check else len(all_packages)
-    status_suffix = " (筛选后)" if is_filtered_check else ""
-    scope_desc = f"检查了 {checked_count_display} 个显示的包" if is_filtered_check else f"检查了所有 {len(all_packages)} 个包"
-    status_message = f"{scope_desc}，完成 ({duration:.1f}秒): 找到 {count} 个过时包{status_suffix}。"
-    try:
-        if status_label and status_label.winfo_exists():
-            status_label.config(text=status_message)
-        update_log(f"✅ {status_message}")
-        enable_buttons()
-        if count > 0:
-            msg_suffix = "\n\n(注意：结果基于检查时显示的包)" if is_filtered_check else ""
-            if messagebox.askyesno("检查完成", f"{status_message}{msg_suffix}\n\n是否立即切换到仅显示这些过时包的视图？"):
-                if current_view_mode != "outdated":
-                    toggle_outdated_view()
-                else:
-                    populate_table(view_mode="outdated")
-            elif current_view_mode == "outdated":
-                populate_table(view_mode="outdated")
-        else:
-            messagebox.showinfo("检查完成", f"在检查的包中未找到过时版本{status_suffix}。")
-            if current_view_mode == "outdated":
-                toggle_outdated_view()
-    except tk.TclError:
-        print("检查完成后更新 GUI 出错 (控件可能已被销毁)。")
-
-def toggle_outdated_view():
-    """在 'all' 和 'outdated' 之间切换表格视图。"""
-    global current_view_mode
-    if outdated_packages_data is None:
-        messagebox.showinfo("请先检查", "请先点击 '检查更新' 来获取过时包列表。\n(检查将基于当前视图)")
-        return
-    try:
-        if current_view_mode == "all":
-            if not outdated_packages_data:
-                messagebox.showinfo("无过时数据", "上次检查未发现过时的包，或检查结果已被刷新。")
-                if toggle_view_button and toggle_view_button.winfo_exists():
-                    toggle_view_button.config(text="仅显示过时包", state="disabled")
-                if update_all_button and update_all_button.winfo_exists():
-                    update_all_button.config(state="disabled")
+class VersionFetcherThread(QThread):
+    """获取包版本的线程。"""
+    finished = pyqtSignal(str, list)
+    
+    def __init__(self, pkg_name: str):
+        super().__init__()
+        self.pkg_name = pkg_name
+    
+    def run(self):
+        if self.pkg_name in global_version_cache:
+            versions, timestamp = global_version_cache[self.pkg_name]
+            if time.time() - timestamp < 300:
+                self.finished.emit(self.pkg_name, versions)
                 return
-            current_view_mode = "outdated"
-            if status_label and status_label.winfo_exists():
-                status_label.config(text=f"当前显示: 上次检查发现的过时包 ({len(outdated_packages_data)} 个)")
-            populate_table(view_mode="outdated")
+        
+        try:
+            command = PIP_COMMAND_LIST + ["index", "versions", self.pkg_name]
+            result = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8", timeout=35,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            if result.returncode == 0 and result.stdout:
+                versions = parse_pip_index_versions(result.stdout, self.pkg_name)
+                global_version_cache[self.pkg_name] = (versions, time.time())
+                self.finished.emit(self.pkg_name, versions)
+            else:
+                self.finished.emit(self.pkg_name, [])
+        except Exception as e:
+            print(f"获取 {self.pkg_name} 版本出错: {e}")
+            self.finished.emit(self.pkg_name, [])
+
+
+class PipCommandThread(QThread):
+    """执行 pip 命令的线程。"""
+    output = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, command: List[str], action_name: str):
+        super().__init__()
+        self.command = command
+        self.action_name = action_name
+    
+    def run(self):
+        self.output.emit(f"⏳ {self.action_name}...\n   命令: {' '.join(self.command)}\n")
+        
+        try:
+            process = subprocess.Popen(
+                self.command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding='utf-8', errors='replace',
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            stdout, stderr = process.communicate(timeout=600)
+            
+            if process.returncode == 0:
+                msg = f"✅ {self.action_name} 成功。\n--- 输出 ---\n{stdout}\n"
+                if stderr:
+                    msg += f"--- 警告/信息 ---\n{stderr}\n"
+                self.output.emit(msg)
+                self.finished.emit(True, self.action_name)
+            else:
+                msg = f"❌ {self.action_name} 失败 (Code: {process.returncode}).\n--- 输出 ---\n{stdout}\n--- 错误 ---\n{stderr}\n"
+                self.output.emit(msg)
+                self.finished.emit(False, self.action_name)
+        except subprocess.TimeoutExpired:
+            self.output.emit(f"⌛ {self.action_name} 超时 (超过10分钟)。\n")
+            self.finished.emit(False, self.action_name)
+        except Exception as e:
+            self.output.emit(f"❌ 执行 {self.action_name} 时发生错误: {str(e)}\n")
+            self.finished.emit(False, self.action_name)
+
+
+class BatchUpdateThread(QThread):
+    """批量更新包的线程。"""
+    output = pyqtSignal(str)
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(bool)
+    
+    def __init__(self, packages: List[Tuple[str, str, str]]):
+        super().__init__()
+        self.packages = packages
+    
+    def run(self):
+        total = len(self.packages)
+        all_success = True
+        
+        for i, (name, installed, latest) in enumerate(self.packages):
+            self.progress.emit(i + 1, total)
+            target = f"{name}=={latest}"
+            command = PIP_COMMAND_LIST + ["install", "--upgrade", "--no-cache-dir", target]
+            action = f"更新 {name} 到 {latest}"
+            
+            self.output.emit(f"⏳ ({i+1}/{total}) {action}...\n   命令: {' '.join(command)}\n")
+            
+            try:
+                process = subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding='utf-8', errors='replace',
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                stdout, stderr = process.communicate(timeout=600)
+                
+                if process.returncode == 0:
+                    self.output.emit(f"✅ ({i+1}/{total}) {action} 成功。\n")
+                else:
+                    all_success = False
+                    self.output.emit(f"❌ ({i+1}/{total}) {action} 失败。\n--- 错误 ---\n{stderr}\n")
+            except Exception as e:
+                all_success = False
+                self.output.emit(f"❌ ({i+1}/{total}) {action} 出错: {e}\n")
+        
+        self.finished.emit(all_success)
+
+
+# --- 主窗口 ---
+class PipToolboxWindow(QMainWindow):
+    """Pip 包管理器主窗口。"""
+    
+    def __init__(self):
+        super().__init__()
+        self.all_packages: List[Tuple[str, str]] = []
+        self.outdated_packages: List[Tuple[str, str, str]] = []
+        self.current_view = "all"  # "all" 或 "outdated"
+        self.active_threads: List[QThread] = []
+        self.version_fetcher: Optional[VersionFetcherThread] = None
+        
+        self.init_ui()
+        self.load_packages()
+    
+    def init_ui(self):
+        """初始化用户界面。"""
+        self.setWindowTitle("Python Pip 包管理器 (PyQt5)")
+        
+        # 设置窗口大小
+        screen = QApplication.primaryScreen().geometry()
+        width = int(screen.width() * 0.5)
+        height = int(screen.height() * 0.75)
+        self.setGeometry(200, 100, width, height)
+        self.setMinimumSize(800, 600)
+        
+        # 中央部件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
+        
+        # 标题栏
+        title_layout = QHBoxLayout()
+        title_label = QLabel("🐍 Python Pip 包管理器")
+        title_label.setObjectName("titleLabel")
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+        
+        # 当前源显示
+        source_label = QLabel(f"📦 源: {get_current_source()[:50]}...")
+        source_label.setStyleSheet("color: #6c7086; font-size: 11px;")
+        title_layout.addWidget(source_label)
+        main_layout.addLayout(title_layout)
+        
+        # 搜索栏
+        search_layout = QHBoxLayout()
+        search_label = QLabel("🔍 搜索包:")
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("输入包名称进行搜索...")
+        self.search_input.textChanged.connect(self.filter_packages)
+        self.package_count_label = QLabel("包数量: 0")
+        self.package_count_label.setObjectName("countLabel")
+        
+        search_layout.addWidget(search_label)
+        search_layout.addWidget(self.search_input, 1)
+        search_layout.addWidget(self.package_count_label)
+        main_layout.addLayout(search_layout)
+        
+        # 创建分割器
+        splitter = QSplitter(Qt.Vertical)
+        
+        # 包列表表格
+        table_container = QWidget()
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["包名称", "当前版本", "可用版本"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setAlternatingRowColors(False)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
+        self.table.itemSelectionChanged.connect(self.on_selection_changed)
+        
+        table_layout.addWidget(self.table)
+        splitter.addWidget(table_container)
+        
+        # 日志区域
+        log_container = QWidget()
+        log_layout = QVBoxLayout(log_container)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        
+        log_header = QHBoxLayout()
+        log_title = QLabel("📋 操作日志")
+        log_title.setStyleSheet("font-weight: bold; color: #89b4fa;")
+        self.clear_log_btn = QPushButton("清空")
+        self.clear_log_btn.setFixedWidth(60)
+        self.clear_log_btn.clicked.connect(self.clear_log)
+        log_header.addWidget(log_title)
+        log_header.addStretch()
+        log_header.addWidget(self.clear_log_btn)
+        
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(150)
+        
+        log_layout.addLayout(log_header)
+        log_layout.addWidget(self.log_text)
+        splitter.addWidget(log_container)
+        
+        splitter.setSizes([500, 150])
+        main_layout.addWidget(splitter, 1)
+        
+        # 进度条
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(6)
+        main_layout.addWidget(self.progress_bar)
+        
+        # 按钮区域
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+        
+        # 左侧按钮
+        self.install_btn = QPushButton("📥 安装/更新")
+        self.install_btn.setObjectName("primaryButton")
+        self.install_btn.clicked.connect(self.install_selected)
+        
+        self.uninstall_btn = QPushButton("🗑️ 卸载")
+        self.uninstall_btn.setObjectName("dangerButton")
+        self.uninstall_btn.clicked.connect(self.uninstall_selected)
+        
+        button_layout.addWidget(self.install_btn)
+        button_layout.addWidget(self.uninstall_btn)
+        
+        # 分隔
+        separator1 = QFrame()
+        separator1.setFrameShape(QFrame.VLine)
+        separator1.setStyleSheet("background-color: #45475a;")
+        button_layout.addWidget(separator1)
+        
+        # 更新相关按钮
+        self.check_updates_btn = QPushButton("🔄 检查更新")
+        self.check_updates_btn.clicked.connect(self.check_updates)
+        
+        self.toggle_view_btn = QPushButton("📋 仅显示过时包")
+        self.toggle_view_btn.clicked.connect(self.toggle_view)
+        self.toggle_view_btn.setEnabled(False)
+        
+        self.update_all_btn = QPushButton("⬆️ 全部更新")
+        self.update_all_btn.setObjectName("successButton")
+        self.update_all_btn.clicked.connect(self.update_all)
+        self.update_all_btn.setEnabled(False)
+        
+        button_layout.addWidget(self.check_updates_btn)
+        button_layout.addWidget(self.toggle_view_btn)
+        button_layout.addWidget(self.update_all_btn)
+        
+        button_layout.addStretch()
+        
+        # 右侧按钮
+        self.change_source_btn = QPushButton("⚙️ 更改源")
+        self.change_source_btn.setObjectName("warningButton")
+        self.change_source_btn.clicked.connect(self.change_source)
+        
+        self.refresh_btn = QPushButton("🔃 刷新")
+        self.refresh_btn.clicked.connect(self.load_packages)
+        
+        button_layout.addWidget(self.change_source_btn)
+        button_layout.addWidget(self.refresh_btn)
+        
+        main_layout.addLayout(button_layout)
+        
+        # 状态栏
+        self.status_label = QLabel("就绪")
+        self.status_label.setObjectName("statusLabel")
+        main_layout.addWidget(self.status_label)
+    
+    def log(self, message: str):
+        """添加日志消息。"""
+        self.log_text.append(message)
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
+    
+    def clear_log(self):
+        """清空日志。"""
+        self.log_text.clear()
+    
+    def set_buttons_enabled(self, enabled: bool):
+        """设置按钮启用状态。"""
+        self.install_btn.setEnabled(enabled)
+        self.uninstall_btn.setEnabled(enabled)
+        self.check_updates_btn.setEnabled(enabled)
+        self.change_source_btn.setEnabled(enabled)
+        self.refresh_btn.setEnabled(enabled)
+        if enabled:
+            self.toggle_view_btn.setEnabled(len(self.outdated_packages) > 0)
+            self.update_all_btn.setEnabled(
+                self.current_view == "outdated" and len(self.outdated_packages) > 0
+            )
         else:
-            current_view_mode = "all"
-            if status_label and status_label.winfo_exists():
-                status_label.config(text=f"当前显示: 所有包 ({len(all_packages)} 个)")
-            populate_table(view_mode="all")
-    except tk.TclError:
-        print("切换视图出错 (控件可能已被销毁)。")
+            self.toggle_view_btn.setEnabled(False)
+            self.update_all_btn.setEnabled(False)
+    
+    def load_packages(self):
+        """加载已安装的包列表。"""
+        self.set_buttons_enabled(False)
+        self.status_label.setText("正在加载包列表...")
+        self.log("🔄 正在加载已安装的包列表...\n")
+        
+        self.loader_thread = PackageLoaderThread()
+        self.loader_thread.finished.connect(self.on_packages_loaded)
+        self.loader_thread.error.connect(self.on_load_error)
+        self.loader_thread.start()
+        self.active_threads.append(self.loader_thread)
+    
+    def on_packages_loaded(self, packages: List[Tuple[str, str]]):
+        """包加载完成回调。"""
+        self.all_packages = packages
+        self.outdated_packages = []
+        self.current_view = "all"
+        self.populate_table(packages)
+        self.status_label.setText(f"已加载 {len(packages)} 个包")
+        self.log(f"✅ 成功加载 {len(packages)} 个已安装包\n")
+        self.set_buttons_enabled(True)
+        self.toggle_view_btn.setEnabled(False)
+        self.update_all_btn.setEnabled(False)
+    
+    def on_load_error(self, error: str):
+        """加载错误回调。"""
+        self.status_label.setText("加载失败")
+        self.log(f"❌ 加载包列表失败: {error}\n")
+        self.set_buttons_enabled(True)
+        QMessageBox.critical(self, "错误", f"加载包列表失败:\n{error}")
+    
+    def populate_table(self, packages: List[Tuple[str, str]]):
+        """填充表格数据。"""
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(packages))
+        
+        for row, (name, version) in enumerate(packages):
+            # 包名
+            name_item = QTableWidgetItem(name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 0, name_item)
+            
+            # 当前版本
+            version_item = QTableWidgetItem(version)
+            version_item.setFlags(version_item.flags() & ~Qt.ItemIsEditable)
+            
+            # 检查是否过时
+            if self.current_view == "outdated":
+                for pkg_name, installed, latest in self.outdated_packages:
+                    if pkg_name == name:
+                        version_item.setForeground(QColor("#f38ba8"))
+                        break
+            
+            self.table.setItem(row, 1, version_item)
+            
+            # 版本选择下拉框
+            combo = QComboBox()
+            combo.addItem("点击选择加载...")
+            combo.setEnabled(False)
+            self.table.setCellWidget(row, 2, combo)
+        
+        count_text = f"过时包: {len(packages)}" if self.current_view == "outdated" else f"包数量: {len(packages)}"
+        self.package_count_label.setText(count_text)
+    
+    def filter_packages(self):
+        """根据搜索框过滤包列表。"""
+        query = self.search_input.text().strip().lower()
+        
+        if self.current_view == "outdated":
+            base_packages = [(n, i) for n, i, l in self.outdated_packages]
+        else:
+            base_packages = self.all_packages
+        
+        if query:
+            filtered = [(n, v) for n, v in base_packages if query in n.lower()]
+        else:
+            filtered = base_packages
+        
+        self.populate_table(filtered)
+    
+    def on_selection_changed(self):
+        """选中行变化时加载版本。"""
+        selected = self.table.selectedItems()
+        if not selected:
+            return
+        
+        row = selected[0].row()
+        name_item = self.table.item(row, 0)
+        if not name_item:
+            return
+        
+        pkg_name = name_item.text()
+        combo = self.table.cellWidget(row, 2)
+        
+        if combo and combo.count() <= 1:
+            combo.clear()
+            combo.addItem("正在加载版本...")
+            
+            self.version_fetcher = VersionFetcherThread(pkg_name)
+            self.version_fetcher.finished.connect(
+                lambda name, versions: self.on_versions_fetched(row, name, versions)
+            )
+            self.version_fetcher.start()
+    
+    def on_versions_fetched(self, row: int, pkg_name: str, versions: List[str]):
+        """版本获取完成回调。"""
+        if row >= self.table.rowCount():
+            return
+        
+        combo = self.table.cellWidget(row, 2)
+        if not combo:
+            return
+        
+        combo.clear()
+        
+        if not versions:
+            combo.addItem("无可用版本")
+            combo.setEnabled(False)
+            return
+        
+        # 获取当前安装版本
+        current_ver = None
+        name_item = self.table.item(row, 0)
+        if name_item:
+            for n, v in self.all_packages:
+                if n == name_item.text():
+                    current_ver = v
+                    break
+        
+        # 填充版本列表
+        for ver in versions:
+            label = ver
+            if ver == current_ver:
+                label += " (当前)"
+            combo.addItem(label)
+        
+        combo.setEnabled(True)
+        
+        # 选中当前版本
+        if current_ver:
+            for i in range(combo.count()):
+                if combo.itemText(i).startswith(current_ver):
+                    combo.setCurrentIndex(i)
+                    break
+    
+    def install_selected(self):
+        """安装选定版本。"""
+        selected = self.table.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "未选择", "请先选择一个包")
+            return
+        
+        row = selected[0].row()
+        name_item = self.table.item(row, 0)
+        combo = self.table.cellWidget(row, 2)
+        
+        if not name_item or not combo or not combo.isEnabled():
+            QMessageBox.warning(self, "无法安装", "请等待版本加载完成")
+            return
+        
+        pkg_name = name_item.text()
+        selected_ver = combo.currentText().split(" ")[0].strip()
+        
+        if not selected_ver or selected_ver in ["无可用版本", "正在加载版本..."]:
+            QMessageBox.warning(self, "无法安装", "请选择有效的版本")
+            return
+        
+        # 确认对话框
+        reply = QMessageBox.question(
+            self, "确认安装",
+            f"确定要安装 {pkg_name}=={selected_ver} 吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            target = f"{pkg_name}=={selected_ver}"
+            command = PIP_COMMAND_LIST + ["install", "--upgrade", "--no-cache-dir", target]
+            self.run_pip_command(command, f"安装 {target}")
+    
+    def uninstall_selected(self):
+        """卸载选定的包。"""
+        selected = self.table.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "未选择", "请先选择一个包")
+            return
+        
+        row = selected[0].row()
+        name_item = self.table.item(row, 0)
+        if not name_item:
+            return
+        
+        pkg_name = name_item.text()
+        
+        reply = QMessageBox.question(
+            self, "确认卸载",
+            f"确定要卸载 {pkg_name} 吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            command = PIP_COMMAND_LIST + ["uninstall", "-y", pkg_name]
+            self.run_pip_command(command, f"卸载 {pkg_name}")
+    
+    def run_pip_command(self, command: List[str], action_name: str):
+        """执行 pip 命令。"""
+        self.set_buttons_enabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # 无限进度
+        
+        self.command_thread = PipCommandThread(command, action_name)
+        self.command_thread.output.connect(self.log)
+        self.command_thread.finished.connect(self.on_command_finished)
+        self.command_thread.start()
+        self.active_threads.append(self.command_thread)
+    
+    def on_command_finished(self, success: bool, action_name: str):
+        """命令执行完成回调。"""
+        self.progress_bar.setVisible(False)
+        
+        if success:
+            self.status_label.setText(f"{action_name} 完成")
+            # 刷新包列表
+            self.load_packages()
+        else:
+            self.status_label.setText(f"{action_name} 失败")
+            self.set_buttons_enabled(True)
+    
+    def check_updates(self):
+        """检查更新。"""
+        # 获取当前显示的包
+        packages = []
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 0)
+            ver_item = self.table.item(row, 1)
+            if name_item and ver_item:
+                packages.append((name_item.text(), ver_item.text()))
+        
+        if not packages:
+            QMessageBox.warning(self, "无包", "没有可检查的包")
+            return
+        
+        self.set_buttons_enabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.status_label.setText("正在检查更新...")
+        self.log(f"🔄 开始检查 {len(packages)} 个包的更新...\n")
+        
+        self.update_checker = UpdateCheckerThread(packages)
+        self.update_checker.progress.connect(self.on_update_check_progress)
+        self.update_checker.finished.connect(self.on_update_check_finished)
+        self.update_checker.start()
+        self.active_threads.append(self.update_checker)
+    
+    def on_update_check_progress(self, percent: int, pkg_name: str, current: int, total: int):
+        """更新检查进度回调。"""
+        self.progress_bar.setValue(percent)
+        self.status_label.setText(f"检查更新 ({percent}%): {current}/{total} - {pkg_name}")
+    
+    def on_update_check_finished(self, outdated: List[Tuple[str, str, str]], duration: float):
+        """更新检查完成回调。"""
+        self.progress_bar.setVisible(False)
+        self.outdated_packages = sorted(outdated)
+        count = len(outdated)
+        
+        self.status_label.setText(f"检查完成: 找到 {count} 个过时包 (用时 {duration:.1f}s)")
+        self.log(f"✅ 检查完成: 找到 {count} 个过时包\n")
+        
+        if count > 0:
+            for name, installed, latest in outdated:
+                self.log(f"   📦 {name}: {installed} → {latest}\n")
+        
+        self.set_buttons_enabled(True)
+        self.toggle_view_btn.setEnabled(count > 0)
+        
+        if count > 0:
+            reply = QMessageBox.question(
+                self, "检查完成",
+                f"找到 {count} 个过时包。\n是否切换到仅显示过时包视图？",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.toggle_view()
+    
+    def toggle_view(self):
+        """切换视图模式。"""
+        if self.current_view == "all":
+            if not self.outdated_packages:
+                QMessageBox.information(self, "无过时包", "没有过时的包可显示")
+                return
+            self.current_view = "outdated"
+            packages = [(n, i) for n, i, l in self.outdated_packages]
+            self.toggle_view_btn.setText("📋 显示所有包")
+            self.update_all_btn.setEnabled(True)
+            self.status_label.setText(f"显示 {len(packages)} 个过时包")
+        else:
+            self.current_view = "all"
+            packages = self.all_packages
+            self.toggle_view_btn.setText("📋 仅显示过时包")
+            self.update_all_btn.setEnabled(False)
+            self.status_label.setText(f"显示所有 {len(packages)} 个包")
+        
+        self.search_input.clear()
+        self.populate_table(packages)
+    
+    def update_all(self):
+        """更新所有过时包。"""
+        if not self.outdated_packages:
+            QMessageBox.information(self, "无过时包", "没有需要更新的包")
+            return
+        
+        count = len(self.outdated_packages)
+        reply = QMessageBox.question(
+            self, "确认更新",
+            f"确定要更新 {count} 个过时包到最新版本吗？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        self.set_buttons_enabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, count)
+        self.log(f"⏳ 开始批量更新 {count} 个包...\n")
+        
+        self.batch_thread = BatchUpdateThread(self.outdated_packages)
+        self.batch_thread.output.connect(self.log)
+        self.batch_thread.progress.connect(lambda c, t: self.progress_bar.setValue(c))
+        self.batch_thread.finished.connect(self.on_batch_update_finished)
+        self.batch_thread.start()
+        self.active_threads.append(self.batch_thread)
+    
+    def on_batch_update_finished(self, success: bool):
+        """批量更新完成回调。"""
+        self.progress_bar.setVisible(False)
+        self.log(f"{'✅' if success else '⚠️'} 批量更新完成\n")
+        self.status_label.setText("批量更新完成")
+        self.load_packages()
+    
+    def change_source(self):
+        """更改 pip 源。"""
+        current = get_current_source()
+        
+        new_source, ok = QInputDialog.getText(
+            self, "更改 Pip 源",
+            f"当前源: {current}\n\n输入新的 PyPI 索引 URL (留空则重置):",
+            text="https://pypi.tuna.tsinghua.edu.cn/simple"
+        )
+        
+        if not ok:
+            return
+        
+        if not new_source.strip():
+            # 重置源
+            reply = QMessageBox.question(
+                self, "确认重置",
+                "确定要移除自定义源设置，恢复默认吗？",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                try:
+                    for scope in ["global", "user"]:
+                        subprocess.run(
+                            PIP_COMMAND_LIST + ["config", "unset", f"{scope}.index-url"],
+                            capture_output=True, check=False,
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                        )
+                    self.log("✅ 已重置 pip 源\n")
+                    self.status_label.setText("已重置为默认源")
+                    QMessageBox.information(self, "成功", "已重置为默认 PyPI 源")
+                except Exception as e:
+                    self.log(f"❌ 重置源失败: {e}\n")
+                    QMessageBox.critical(self, "错误", f"重置源失败: {e}")
+            return
+        
+        if not (new_source.startswith("http://") or new_source.startswith("https://")):
+            QMessageBox.warning(self, "格式错误", "源地址必须以 http:// 或 https:// 开头")
+            return
+        
+        # 设置新源
+        command = PIP_COMMAND_LIST + ["config", "set", "global.index-url", new_source]
+        self.run_pip_command(command, f"设置源为 {new_source}")
+    
+    def closeEvent(self, event):
+        """关闭窗口时清理线程。"""
+        for thread in self.active_threads:
+            if thread.isRunning():
+                thread.terminate()
+                thread.wait(1000)
+        event.accept()
 
-# --- 主应用程序设置 ---
-root = tk.Tk()
-root.title(f"Python Pip 包管理器 (Using: {os.path.basename(PIP_COMMAND)})")
 
-sw = root.winfo_screenwidth()
-sh = root.winfo_screenheight()
-
-w = int(sw * 0.31)
-h = int(sh * 0.7)
-
-root.geometry(f"{w}x{h}+200+100")
-
-#root.geometry("800x750")
-#root.minsize(500, 800)
-
-# --- 样式配置 (可选) ---
-style = ttk.Style()
-try:
-    if os.name == 'nt':
-        style.theme_use('vista')
-    elif sys.platform == 'darwin':
-        style.theme_use('aqua')
-    else:
-        style.theme_use('clam')
-except tk.TclError:
-    print("注意: 选择的 ttk 主题不可用，使用默认。")
-style.configure('Toolbutton', font=('Segoe UI', 9) if os.name == 'nt' else ('Sans', 9))
-
-# --- 顶部框架 (搜索和计数) ---
-top_frame = ttk.Frame(root, padding="10 5 10 5")
-top_frame.pack(fill="x")
-ttk.Label(top_frame, text="搜索包:").pack(side="left")
-search_var = tk.StringVar()
-search_entry = ttk.Entry(top_frame, textvariable=search_var, width=30)
-search_entry.pack(side="left", fill="x", expand=True, padx=5)
-search_entry.bind("<KeyRelease>", search_packages)
-package_count_label = ttk.Label(top_frame, text="包数量: 0", width=20, anchor='e')
-package_count_label.pack(side="right", padx=(5, 0))
-
-# --- 中间框架 (Treeview 和滚动条) ---
-tree_frame = ttk.Frame(root, padding="10 5 10 5")
-tree_frame.pack(fill="both", expand=True)
-columns = ("name", "version")
-tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="browse")
-tree.heading("name", text="包名称", anchor="w")
-tree.heading("version", text="版本信息", anchor="w")
-tree.column("name", width=350, stretch=tk.YES, anchor="w")
-tree.column("version", width=200, stretch=tk.YES, anchor="w")
-tree_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
-tree.configure(yscrollcommand=tree_scrollbar.set)
-tree_scrollbar.pack(side="right", fill="y")
-tree.pack(side="left", fill="both", expand=True)
-
-# --- 按钮框架 ---
-button_frame = ttk.Frame(root, padding="10 5 10 10")
-button_frame.pack(fill="x")
-install_button = ttk.Button(button_frame, text="安装/更新选定版本", command=install_selected_version)
-install_button.pack(side="left", padx=(0, 5))
-uninstall_button = ttk.Button(button_frame, text="卸载选定包", command=uninstall_selected_package)
-uninstall_button.pack(side="left", padx=5)
-ttk.Separator(button_frame, orient=tk.VERTICAL).pack(side="left", fill='y', padx=10, pady=2)
-check_updates_button = ttk.Button(button_frame, text="检查更新", command=check_for_updates)
-check_updates_button.pack(side="left", padx=5)
-toggle_view_button = ttk.Button(button_frame, text="仅显示过时包", command=toggle_outdated_view, state="disabled")
-toggle_view_button.pack(side="left", padx=5)
-ttk.Separator(button_frame, orient=tk.VERTICAL).pack(side="left", fill='y', padx=10, pady=2)
-update_all_button = ttk.Button(button_frame, text="全部更新", command=update_all_packages, state="disabled")
-update_all_button.pack(side="left", padx=5)
-change_source_button = ttk.Button(button_frame, text="更改 Pip 源", command=change_source)
-change_source_button.pack(side="right", padx=(5, 0))
-
-# --- 状态栏 ---
-status_bar = ttk.Frame(root, relief=tk.SUNKEN, borderwidth=1, padding=0)
-status_bar.pack(side="bottom", fill="x")
-status_label = ttk.Label(status_bar, text="就绪.", anchor='w', padding=(5, 2, 5, 2))
-status_label.pack(side="left", fill="x", expand=True)
-log_visible_var = tk.BooleanVar(value=True)  # 默认显示日志
-log_toggle_checkbutton = ttk.Checkbutton(status_bar, text="日志", variable=log_visible_var, command=toggle_log_display, style='Toolbutton')
-log_toggle_checkbutton.pack(side="right", padx=(0, 2), pady=1)
-clear_log_button = ttk.Button(status_bar, text="清空", command=clear_log, width=5, style='Toolbutton')
-
-# --- 日志区域 (初始显示) ---
-log_frame = ttk.Frame(root, height=150, relief=tk.GROOVE, borderwidth=1)
-log_display_area = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, height=8, state=tk.DISABLED, relief=tk.FLAT, bd=0, font=("Consolas", 9) if os.name=='nt' else ("Monospace", 9))
-log_display_area.pack(side="top", fill="both", expand=True, padx=1, pady=1)
-toggle_log_display()  # 启动时显示日志
-
-# --- 事件绑定 ---
-tree.bind("<<TreeviewSelect>>", on_tree_select)
-tree.bind("<Configure>", update_combobox_position)
-root.bind("<Configure>", update_combobox_position)
-tree_scrollbar.bind("<B1-Motion>", lambda e: root.after(50, update_combobox_position))
-root.bind_all("<MouseWheel>", lambda e: root.after(50, update_combobox_position))
-tree.bind("<Up>", lambda e: root.after(50, update_combobox_position))
-tree.bind("<Down>", lambda e: root.after(50, update_combobox_position))
-tree.bind("<Prior>", lambda e: root.after(50, update_combobox_position))
-tree.bind("<Next>", lambda e: root.after(50, update_combobox_position))
-
-# --- 初始数据加载 ---
-def initial_load():
-    """加载初始包列表并填充表格。"""
-    status_label.config(text="正在加载已安装的包列表...")
-    update_log("正在加载已安装的包列表...")
-    disable_buttons()
-    refresh_package_list_threaded()
-
-# --- 主执行 ---
 def main():
-    root.after(100, initial_load)
-    root.mainloop()
-
-# --- 入口点检查 ---
-if __name__ == "__main__":
+    """主入口函数。"""
+    # 检查依赖
     try:
         from packaging.version import parse
     except ImportError:
-        messagebox.showerror("缺少库", "需要 'packaging' 库来进行版本比较。\n请尝试运行: pip install packaging")
+        print("错误: 需要 'packaging' 库。请运行: pip install packaging")
         sys.exit(1)
+    
+    # 检查 pip (非致命检查，允许应用启动)
+    pip_ok = False
     try:
-        proc = subprocess.run([PIP_COMMAND.split()[0], "--version"], check=True, capture_output=True, text=True,
-                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-        print(f"使用 pip: {proc.stdout.strip()}")
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
-        messagebox.showerror("Pip 错误", f"无法执行 '{PIP_COMMAND}'。\n请确保 Python 和 pip 已正确安装并位于系统 PATH 中。\n\n错误详情: {e}")
-        sys.exit(1)
+        result = subprocess.run(
+            PIP_COMMAND_LIST + ["--version"], capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+        pip_ok = result.returncode == 0
+        if not pip_ok:
+            print(f"警告: pip 检查失败: {result.stderr}")
+    except Exception as e:
+        print(f"警告: 无法验证 pip: {e}")
+    
+    # 高 DPI 支持
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    
+    app = QApplication(sys.argv)
+    app.setStyle(QStyleFactory.create("Fusion"))
+    app.setStyleSheet(STYLE_SHEET)
+    
+    window = PipToolboxWindow()
+    window.show()
+    
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
     main()
