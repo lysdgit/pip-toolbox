@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="pip-toolbox",
-    version="0.4.4",
+    version="0.4.5",
     author="lilys",
     author_email="lysder@qq.com",
     description="A toolbox for managing Python packages",

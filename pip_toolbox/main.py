@@ -44,7 +44,7 @@ def get_current_source():
 
 def list_rc_versions(package_name):
     result = subprocess.run(
-        ["pip", "install", f"{package_name}==0.0.89rc1", "--pre"],
+        [PIP_COMMAND, "install", f"{package_name}==0.0.89rc1", "--pre"],
         capture_output=True,
         text=True
     )
